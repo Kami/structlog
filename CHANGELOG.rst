@@ -29,6 +29,8 @@ Changes:
 
 - ``structlog.get_context()`` allows you to retrieve the original context of a bound logger.
   `#266 <https://github.com/hynek/structlog/issues/266>`_,
+- Added ``structlog.stdlib.AsyncBoundLogger`` that executes logging calls in a thread executor and therefore doesn't block.
+  `#245 <https://github.com/hynek/structlog/pull/245>`_
 
 
 ----

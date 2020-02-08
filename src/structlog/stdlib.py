@@ -9,7 +9,10 @@ standard library <https://docs.python.org/>`_.
 See also :doc:`structlog's standard library support <standard-library>`.
 """
 
+import asyncio
 import logging
+
+from functools import partial
 
 from structlog._base import BoundLoggerBase
 from structlog._frames import _find_first_app_frame_and_name, _format_stack
@@ -234,6 +237,75 @@ class BoundLogger(BoundLoggerBase):
         Calls :meth:`logging.Logger.getChild` with unmodified arguments.
         """
         return self._logger.getChild(suffix)
+
+
+class AsyncBoundLogger:
+    """
+    Wraps a `BoundLogger` and runs its logging methods asynchronously in
+    a thread executor.
+
+    Only available for Python 3.7 and later.
+    """
+
+    __slots__ = ["sync_bl", "_loop"]
+
+    executor = None
+    bound_logger_factory = BoundLogger
+
+    def __init__(self, *args, **kw):
+        self.sync_bl = self.bound_logger_factory(*args, **kw)
+        self._loop = asyncio.get_running_loop()
+
+    def bind(self, **new_values) -> "AsyncBoundLogger":
+        self.sync_bl = self.sync_bl.bind(**new_values)
+        return self
+
+    def new(self, **new_values) -> "AsyncBoundLogger":
+        self.sync_bl = self.sync_bl.new(**new_values)
+        return self
+
+    def unbind(self, *keys) -> "AsyncBoundLogger":
+        self.sync_bl = self.sync_bl.try_unbind(*keys)
+        return self
+
+    async def debug(self, event, *args, **kw):
+        return await self._loop.run_in_executor(
+            self.executor, partial(self.sync_bl.debug, event, *args, **kw)
+        )
+
+    async def info(self, event, *args, **kw):
+        return await self._loop.run_in_executor(
+            self.executor, partial(self.sync_bl.info, event, *args, **kw)
+        )
+
+    async def warning(self, event, *args, **kw):
+        return await self._loop.run_in_executor(
+            self.executor, partial(self.sync_bl.warning, event, *args, **kw)
+        )
+
+    warn = warning
+
+    async def error(self, event, *args, **kw):
+        return await self._loop.run_in_executor(
+            self.executor, partial(self.sync_bl.error, event, *args, **kw)
+        )
+
+    async def critical(self, event, *args, **kw):
+        return await self._loop.run_in_executor(
+            self.executor, partial(self.sync_bl.critical, event, *args, **kw)
+        )
+
+    fatal = critical
+
+    async def exception(self, event, *args, **kw):
+        return await self._loop.run_in_executor(
+            self.executor, partial(self.sync_bl.exception, event, *args, **kw)
+        )
+
+    async def log(self, level, event, *args, **kw):
+        return await self._loop.run_in_executor(
+            self.executor, partial(self.sync_bl.log, level, event, *args, **kw)
+        )
 
 
 class LoggerFactory:
