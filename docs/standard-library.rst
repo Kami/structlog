@@ -41,6 +41,17 @@ It behaves exactly like the generic `structlog.BoundLogger` except:
 - hence causing less cryptic error messages if you get method names wrong.
 
 
+``asyncio``
+^^^^^^^^^^^
+
+For ``asyncio`` applications, you may not want your whole application to block while your processor chain is formatting your log entries.
+For that use case ``structlog`` comes with `structlog.stdlib.AsyncBoundLogger` that will do all processing in a thread pool executor.
+
+This means an increased computational cost per log entry but your application will never block because of logging.
+
+To use it, simply replace all instances of `structlog.stdlib.BoundLogger` with `AsyncBoundLogger` in all calls to `structlog.configure`.
+
+
 Processors
 ----------
 
