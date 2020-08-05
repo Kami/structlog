@@ -14,11 +14,12 @@ import logging
 import sys
 
 from functools import partial
-from typing import Any, Callable, List, Mapping, Sequence
+from typing import Any, Callable, Dict, List, Mapping, Sequence, Tuple
 
-from structlog._base import BoundLoggerBase
-from structlog._frames import _find_first_app_frame_and_name, _format_stack
-from structlog.exceptions import DropEvent
+from . import contextvars
+from ._base import BoundLoggerBase
+from ._frames import _find_first_app_frame_and_name, _format_stack
+from .exceptions import DropEvent
 
 
 class _FixedFindCallerLogger(logging.Logger):
@@ -246,12 +247,22 @@ class AsyncBoundLogger:
     Wrap a `BoundLogger` and run its logging methods asynchronously in a thread
     pool executor.
 
-    .. note::
-       This means more computational overhead per log call. But it also means
-       that the processor chain (e.g. JSON serialization) and I/O won't block
-       your whole application.
+    This means more computational overhead per log call. But it also means that
+    the processor chain (e.g. JSON serialization) and I/O won't block your
+    whole application.
+
+    .. warning:
+        Since the processor pipeline runs in a separate thread,
+        `structlog.contextvars.merge_contextvars` does **nothing** and should
+        be removed from you processor chain.
+
+        Instead it's merged within **this logger** before handing off log
+        processing to the thread.
 
     Only available for Python 3.7 and later.
+
+    :ivar sync_bl: The wrapped synchronous logger. It is useful to be able to
+       log synchronously occasionally.
 
     .. versionadded:: 20.2.0
     """
@@ -284,32 +295,38 @@ class AsyncBoundLogger:
         self.sync_bl = self.sync_bl.try_unbind(*keys)
         return self
 
-    async def debug(self, event: str, *args: Any, **kw: Any) -> None:
+    async def _dispatch_to_sync(
+        self,
+        meth: Callable,
+        event: str,
+        args: Tuple[Any, ...],
+        kw: Dict[str, Any],
+    ) -> None:
+        """
+        Merge contextvars and log using the sync logger in a thread pool.
+        """
+        ctx = contextvars._get_context().copy()
+        ctx.update(kw)
         await self._loop.run_in_executor(
-            self._executor, partial(self.sync_bl.debug, event, *args, **kw)
+            self._executor, partial(meth, event, *args, **ctx)
         )
+
+    async def debug(self, event: str, *args: Any, **kw: Any) -> None:
+        await self._dispatch_to_sync(self.sync_bl.debug, event, args, kw)
 
     async def info(self, event: str, *args: Any, **kw: Any) -> None:
-        await self._loop.run_in_executor(
-            self._executor, partial(self.sync_bl.info, event, *args, **kw)
-        )
+        await self._dispatch_to_sync(self.sync_bl.info, event, args, kw)
 
     async def warning(self, event: str, *args: Any, **kw: Any) -> None:
-        await self._loop.run_in_executor(
-            self._executor, partial(self.sync_bl.warning, event, *args, **kw)
-        )
+        await self._dispatch_to_sync(self.sync_bl.warning, event, args, kw)
 
     warn = warning
 
     async def error(self, event: str, *args: Any, **kw: Any) -> None:
-        await self._loop.run_in_executor(
-            self._executor, partial(self.sync_bl.error, event, *args, **kw)
-        )
+        await self._dispatch_to_sync(self.sync_bl.error, event, args, kw)
 
     async def critical(self, event: str, *args: Any, **kw: Any) -> None:
-        await self._loop.run_in_executor(
-            self._executor, partial(self.sync_bl.critical, event, *args, **kw)
-        )
+        await self._dispatch_to_sync(self.sync_bl.critical, event, args, kw)
 
     fatal = critical
 
@@ -319,16 +336,13 @@ class AsyncBoundLogger:
         ei = kw.pop("exc_info", None)
         if ei is None and kw.get("exception") is None:
             ei = sys.exc_info()
+        kw["exc_info"] = ei
 
-        await self._loop.run_in_executor(
-            self._executor,
-            partial(self.sync_bl.exception, event, *args, exc_info=ei, **kw),
-        )
+        await self._dispatch_to_sync(self.sync_bl.exception, event, args, kw)
 
     async def log(self, level: Any, event: str, *args: Any, **kw: Any) -> None:
-        await self._loop.run_in_executor(
-            self._executor,
-            partial(self.sync_bl.log, level, event, *args, **kw),
+        await self._dispatch_to_sync(
+            partial(self.sync_bl.log, level), event, args, kw
         )
 
 
